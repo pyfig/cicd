@@ -1,0 +1,74 @@
+stages:
+  - build
+  - styleTest
+  - integration
+  - deploy
+
+# .telegram: &telegram
+#   - |
+#     source /home/gitlab-runner/config.conf
+#     MESSAGE=$(if [[ "$CI_JOB_STATUS" =~ "failed" ]]; then echo "$CI_JOB_STAGE stage: FAIL"; else echo "$CI_JOB_STAGE stage: SUCCESS"; fi)
+#     ssh "$REMOTE_USER"@"$REMOTE_SERVER" "curl -s -X POST $API_URL -d chat_id=$CHAT_ID -d text=\"$MESSAGE\"" > /dev/null
+  # eval $(ssh-agent -s)
+  # ssh-add ~/.ssh/id_rsa
+  # ssh-keyscan -H "$REMOTE_SERVER" >> ~/.ssh/known_hosts
+.telegram: &telegram |
+  source /home/gitlab-runner/config.conf
+  MESSAGE=$(if [[ "$CI_JOB_STATUS" =~ "failed" ]]; then echo "$CI_JOB_STAGE stage: FAIL"; else echo "$CI_JOB_STAGE stage: SUCCESS"; fi)
+  ssh "$REMOTE_USER@$REMOTE_SERVER" "curl -s -X POST $API_URL -d chat_id=$CHAT_ID -d text=\"$MESSAGE\"" > /dev/null
+
+
+
+CompileUtils:
+  stage: build
+  script:
+    - cd src/SimpleBash/src/cat/
+    - make
+    - cd ../grep/
+    - make
+  after_script:
+    - *telegram
+  artifacts:
+    paths:
+      - src/SimpleBash/src/cat/s21_cat
+      - src/SimpleBash/src/grep/s21_grep
+    expire_in: 30 days
+
+ClangTest:
+  stage: styleTest
+  script:
+    - cd src/SimpleBash/src/cat
+    - clang-format -Werror -n *.c
+    - cd ../grep
+    - clang-format -Werror -n *.c
+    - if ! git diff --exit-code; then echo "Clang error"; exit 1; fi
+  after_script:
+    - *telegram
+  needs:
+    - CompileUtils
+
+IntegrationTests:
+  stage: integration
+  script:
+    - cd src/SimpleBash/src/cat
+    - sh integration_test.sh > /dev/null 2>text.txt
+    - cd ../grep
+    - sh integration_test.sh > /dev/null 2>text.txt
+    - if grep -q "FAIL" text.txt || grep -q "PASS" text.txt; then echo "failed"; exit 1; else echo "passed"; fi
+  after_script:
+    - *telegram
+  needs:
+    - CompileUtils
+    - ClangTest
+
+Deploy-job:
+  stage: deploy
+  when: manual
+  script: 
+    - |
+      scp src/SimpleBash/src/cat/s21_cat user@192.10.10.5:/usr/local/bin
+      scp src/SimpleBash/src/grep/s21_grep user@192.10.10.5:/usr/local/bin
+  after_script:
+    - *telegram
+  only:
+    - develop
